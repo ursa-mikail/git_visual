@@ -1,0 +1,6 @@
+# github.com/lib/pq v1.10.9
+## explicit; go 1.13
+github.com/lib/pq
+github.com/lib/pq/array
+github.com/lib/pq/oid
+github.com/lib/pq/scram

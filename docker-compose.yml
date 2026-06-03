@@ -1,0 +1,62 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gitvisual_postgres
+    environment:
+      POSTGRES_USER: gitvisual
+      POSTGRES_PASSWORD: gitvisual
+      POSTGRES_DB: gitvisual
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitvisual -d gitvisual"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gitvisual_backend
+    environment:
+      DATABASE_URL: postgres://gitvisual:gitvisual@postgres:5432/gitvisual?sslmode=disable
+      PORT: 8080
+      # GIT_SSH_COMMAND is set dynamically per-operation by the backend based on selected key.
+      # Default fallback uses all standard key names; override via the SSH page in the UI.
+      GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts -o BatchMode=yes"
+    volumes:
+      - repos_data:/repos
+      # Mount your real SSH keys read-only into the container
+      # This gives git full access to push/pull using your existing keys —
+      # the same keys GitHub/GitLab already knows about.
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # Mount your home so local repo paths work as-is
+      - ${HOME}:/host-home:rw
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gitvisual_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  repos_data:
