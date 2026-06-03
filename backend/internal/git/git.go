@@ -777,14 +777,28 @@ func ApplyStash(dir string, pop bool) (string, error) {
 	return out, nil
 }
 
-// GetFileTree returns the file tree at HEAD or a ref
+// GetFileTree returns the file tree for a ref (branch, tag, commit hash, remote-tracking ref).
+// It resolves the ref to a commit hash first so that remote-tracking refs like
+// "origin/main" work correctly with ls-tree.
 func GetFileTree(dir, ref string) ([]FileEntry, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
-	out, _, err := RunGit(dir, "ls-tree", "-r", "--name-only", ref)
-	if err != nil {
-		return nil, err
+	// Resolve to a commit hash — handles "origin/main", short hashes, tags, etc.
+	resolved, _, err := RunGit(dir, "rev-parse", "--verify", ref)
+	resolved = strings.TrimSpace(resolved)
+	if err != nil || resolved == "" {
+		// Try with "refs/remotes/" prefix for bare refs like "origin/main"
+		resolved2, _, err2 := RunGit(dir, "rev-parse", "--verify", "refs/remotes/"+ref)
+		resolved2 = strings.TrimSpace(resolved2)
+		if err2 != nil || resolved2 == "" {
+			return nil, fmt.Errorf("cannot resolve ref %q: %v", ref, err)
+		}
+		resolved = resolved2
+	}
+	out, _, lsErr := RunGit(dir, "ls-tree", "-r", "--name-only", resolved)
+	if lsErr != nil {
+		return nil, lsErr
 	}
 	var files []FileEntry
 	for _, f := range strings.Split(out, "\n") {

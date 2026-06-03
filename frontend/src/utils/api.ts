@@ -80,10 +80,15 @@ export const bulkImportRepos = (repos: unknown[]) => api.post('/repos/bulk-impor
 
 // Returns RefInfo[] — { label, ref, kind: 'branch'|'tag'|'commit' }
 export const getRefs = (repoId: string) => api.get(`/repos/${repoId}/refs`).then(d)
+// Returns FileEntry[] — { path } — all files in a ref
+export const getRefTree = (repoId: string, ref: string) => api.get(`/repos/${repoId}/ref-tree`, { params: { ref } }).then(d)
+// Returns FileEntry[] — { path } — all files in a ref, from any repo
+export const getCrossRefTree = (repoId: string, ref: string, targetRepoId?: string) =>
+  api.get(`/repos/${repoId}/cross-ref-tree`, { params: { ref, repo_id: targetRepoId } }).then(d)
 // Returns RefEntry[] — { label, repo_id, ref, kind }
 export const getAllRefs = (repoId: string) => api.get(`/repos/${repoId}/all-refs`).then(d)
-export const getCrossDiff = (repoId: string, base?: string, compare?: string, compareRepoId?: string) =>
-  api.get(`/repos/${repoId}/cross-diff`, { params: { base, compare, compare_repo_id: compareRepoId } }).then(d)
+export const getCrossDiff = (repoId: string, base?: string, compare?: string, compareRepoId?: string, baseRepoId?: string) =>
+  api.get(`/repos/${repoId}/cross-diff`, { params: { base, compare, compare_repo_id: compareRepoId, base_repo_id: baseRepoId } }).then(d)
 
 export const getFileTree = (repoId: string, ref?: string) => api.get(`/repos/${repoId}/files`, { params: { ref } }).then(d)
 export const getFileContent = (repoId: string, path: string, ref?: string) => api.get(`/repos/${repoId}/files/${path}`, { params: { ref } }).then(d)
