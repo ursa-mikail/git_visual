@@ -1049,8 +1049,8 @@ func (h *Handler) getDiffDebug(w http.ResponseWriter, r *http.Request, repoID st
 	baseRev, _, _ := git.RunGit(dir, "rev-parse", "--short", base)
 	cmpRev, _, _ := git.RunGit(dir, "rev-parse", "--short", compare)
 	results["resolved"] = map[string]string{
-		"base_hash":    baseRev,
-		"compare_hash": cmpRev,
+		"base_hash":    strings.TrimSpace(baseRev),
+		"compare_hash": strings.TrimSpace(cmpRev),
 	}
 
 	writeJSON(w, 200, results)
@@ -1156,63 +1156,92 @@ func (h *Handler) getCrossDiff(w http.ResponseWriter, r *http.Request, repoID st
 		return
 	}
 
-	// Cross-repo: fetch all objects from the compare repo into a temp remote,
-	// resolve both refs to full commit hashes, then diff with plain two-dot
-	// (no three-dot — repos may share no history at all).
+	// Cross-repo diff:
+	// 1. Add the compare repo as a temporary local remote
+	// 2. Fetch all its objects into the base repo's object store
+	// 3. Resolve both refs to full commit SHAs (trimming whitespace!)
+	// 4. Plain two-dot diff — no three-dot, repos may share no history
 	compareDir, err := h.getRepoPath(compareRepoID)
 	if err != nil {
 		errJSON(w, 404, "compare repo not found")
 		return
 	}
 
-	remoteName := "tmp_crossdiff_" + compareRepoID[:8]
+	// Safe remote name — use first 8 chars of ID if long enough, else full ID
+	ridShort := compareRepoID
+	if len(ridShort) > 8 {
+		ridShort = ridShort[:8]
+	}
+	remoteName := "tmp_crossdiff_" + ridShort
 	defer git.RunGit(baseDir, "remote", "remove", remoteName)
+	git.RunGit(baseDir, "remote", "remove", remoteName) // clean stale
 
-	// Remove any stale remote from a previous failed run
-	git.RunGit(baseDir, "remote", "remove", remoteName)
-
-	// Add temp remote pointing at the other repo's local filesystem path
 	_, errStr, gitErr := git.RunGit(baseDir, "remote", "add", remoteName, compareDir)
 	if gitErr != nil {
 		errJSON(w, 500, "could not add temp remote: "+errStr)
 		return
 	}
 
-	// Fetch all branches/tags from the compare repo so every object is available
-	_, fetchErr, fetchGitErr := git.RunGit(baseDir, "fetch", remoteName)
-	if fetchGitErr != nil {
-		errJSON(w, 500, "fetch failed: "+fetchErr)
-		return
-	}
+	// Fetch every ref; ignore exit code — partial fetches are fine
+	git.RunGit(baseDir, "fetch", remoteName, "--tags")
 
-	// Resolve base ref to a full hash inside baseDir
-	baseHash, baseErrStr, baseErr := git.RunGit(baseDir, "rev-parse", base)
-	if baseErr != nil || baseHash == "" {
-		errJSON(w, 400, "cannot resolve base ref \""+base+"\": "+baseErrStr)
-		return
-	}
-
-	// Resolve compare ref: first try as remote-tracking ref, then as bare hash
-	cmpRemoteRef := remoteName + "/" + compare
-	cmpHash, _, cmpErr := git.RunGit(baseDir, "rev-parse", cmpRemoteRef)
-	if cmpErr != nil || cmpHash == "" {
-		// Might be a commit hash already fetchable as an object
-		cmpHash, _, cmpErr = git.RunGit(baseDir, "rev-parse", compare)
-		if cmpErr != nil || cmpHash == "" {
-			errJSON(w, 400, "cannot resolve compare ref \""+compare+"\"")
+	// ── Resolve base ref ──────────────────────────────────────────────────────
+	var baseHash string
+	if base != "" {
+		out, eStr, e := git.RunGit(baseDir, "rev-parse", "--verify", base)
+		if e != nil || strings.TrimSpace(out) == "" {
+			errJSON(w, 400, fmt.Sprintf("cannot resolve base ref %q in base repo: %s", base, eStr))
 			return
+		}
+		baseHash = strings.TrimSpace(out)
+	} else {
+		// Default to HEAD of the base repo
+		out, _, _ := git.RunGit(baseDir, "rev-parse", "--verify", "HEAD")
+		baseHash = strings.TrimSpace(out)
+	}
+
+	// ── Resolve compare ref ───────────────────────────────────────────────────
+	var cmpHash string
+	if compare != "" {
+		// Try: remote-tracking ref (works for branch names)
+		if out, _, e := git.RunGit(baseDir, "rev-parse", "--verify", remoteName+"/"+compare); e == nil && strings.TrimSpace(out) != "" {
+			cmpHash = strings.TrimSpace(out)
+		} else if out, _, e := git.RunGit(baseDir, "rev-parse", "--verify", compare); e == nil && strings.TrimSpace(out) != "" {
+			// Bare hash or tag that was fetched
+			cmpHash = strings.TrimSpace(out)
+		} else {
+			// Last resort: look it up inside compareDir itself, then object-import
+			if out, _, e := git.RunGit(compareDir, "rev-parse", "--verify", compare); e == nil && strings.TrimSpace(out) != "" {
+				cmpHash = strings.TrimSpace(out)
+				// The object may not be in baseDir yet; fetch by exact SHA
+				git.RunGit(baseDir, "fetch", remoteName, cmpHash)
+			} else {
+				errJSON(w, 400, fmt.Sprintf("cannot resolve compare ref %q", compare))
+				return
+			}
+		}
+	} else {
+		// Default to HEAD of compare repo
+		if out, _, e := git.RunGit(baseDir, "rev-parse", "--verify", remoteName+"/HEAD"); e == nil && strings.TrimSpace(out) != "" {
+			cmpHash = strings.TrimSpace(out)
+		} else {
+			out, _, _ := git.RunGit(compareDir, "rev-parse", "--verify", "HEAD")
+			cmpHash = strings.TrimSpace(out)
 		}
 	}
 
-	// Plain two-dot diff between the two resolved hashes.
-	// Three-dot is intentionally avoided: repos may have no shared history.
-	out, diffErrStr, diffErr := git.RunGit(baseDir, "--no-optional-locks", "diff", "--unified=5", baseHash+".."+cmpHash)
-	if diffErr != nil && out == "" {
+	if baseHash == "" || cmpHash == "" {
+		errJSON(w, 400, "could not resolve one or both refs to a commit hash")
+		return
+	}
+
+	diffOut, diffErrStr, diffErr := git.RunGit(baseDir, "--no-optional-locks", "diff", "--unified=5", baseHash+".."+cmpHash)
+	if diffErr != nil && strings.TrimSpace(diffOut) == "" {
 		errJSON(w, 500, "diff failed: "+diffErrStr)
 		return
 	}
 
-	files := git.ParseDiffPublic(out)
+	files := git.ParseDiffPublic(diffOut)
 	if files == nil {
 		files = []models.DiffFile{}
 	}
