@@ -523,6 +523,8 @@ func (h *Handler) reposSub(w http.ResponseWriter, r *http.Request) {
 		h.getDiffDebug(w, r, repoID)
 	case "cross-diff":
 		h.getCrossDiff(w, r, repoID)
+	case "file-pair-diff":
+		h.getFilePairDiff(w, r, repoID)
 	case "working-diff":
 		h.getWorkingDiff(w, r, repoID)
 	case "stashes":
@@ -1192,6 +1194,66 @@ func (h *Handler) getAllRefs(w http.ResponseWriter, r *http.Request, repoID stri
 
 // getCrossDiff diffs base ref (in this repo) against compare ref (possibly another repo).
 // Query params: base, compare, compare_repo_id (optional — defaults to same repo).
+// getFilePairDiff diffs a specific file from base against a specific file from compare.
+// This enables cross-repo comparison of files with different paths.
+// Query params: base_ref, base_path, base_repo_id, cmp_ref, cmp_path, cmp_repo_id
+func (h *Handler) getFilePairDiff(w http.ResponseWriter, r *http.Request, repoID string) {
+	baseRef    := r.URL.Query().Get("base_ref")
+	basePath   := r.URL.Query().Get("base_path")
+	baseRID    := r.URL.Query().Get("base_repo_id")
+	cmpRef     := r.URL.Query().Get("cmp_ref")
+	cmpPath    := r.URL.Query().Get("cmp_path")
+	cmpRID     := r.URL.Query().Get("cmp_repo_id")
+
+	if baseRID == "" { baseRID = repoID }
+	if cmpRID  == "" { cmpRID  = repoID }
+	if baseRef == "" { baseRef = "HEAD" }
+	if cmpRef  == "" { cmpRef  = "HEAD" }
+
+	baseDir, err := h.getRepoPath(baseRID)
+	if err != nil { errJSON(w, 404, "base repo not found"); return }
+	cmpDir, err2 := h.getRepoPath(cmpRID)
+	if err2 != nil { errJSON(w, 404, "compare repo not found"); return }
+
+	// Get base file content via git show <ref>:<path>
+	baseContent, _, _ := git.RunGit(baseDir, "show", baseRef+":"+basePath)
+	cmpContent,  _, _ := git.RunGit(cmpDir,  "show", cmpRef+":"+cmpPath)
+
+	// Write to temp files and diff them
+	baseFile, _ := os.CreateTemp("", "gitvisual-base-*")
+	cmpFile,  _ := os.CreateTemp("", "gitvisual-cmp-*")
+	defer os.Remove(baseFile.Name())
+	defer os.Remove(cmpFile.Name())
+	baseFile.WriteString(baseContent)
+	cmpFile.WriteString(cmpContent)
+	baseFile.Close()
+	cmpFile.Close()
+
+	// diff the two temp files with labels showing original paths
+	// exec.Command.Output() returns ([]byte, error) — only 2 values
+	out, _ := exec.Command("diff", "-u",
+		"--label", "a/"+basePath,
+		"--label", "b/"+cmpPath,
+		baseFile.Name(), cmpFile.Name()).Output()
+
+	// Parse as if it were git diff output but with synthetic header
+	syntheticHeader := fmt.Sprintf("diff --git a/%s b/%s\n", basePath, cmpPath)
+	full := syntheticHeader + string(out)
+
+	files := git.ParseDiffPublic(full)
+	if files == nil || len(files) == 0 {
+		// No diff — files are identical
+		files = []models.DiffFile{{Path: cmpPath, OldPath: basePath}}
+	}
+	// Ensure path labels are set correctly
+	if len(files) > 0 {
+		files[0].OldPath = basePath
+		files[0].Path = cmpPath
+	}
+	writeJSON(w, 200, files[0])
+}
+
+
 func (h *Handler) getCrossDiff(w http.ResponseWriter, r *http.Request, repoID string) {
 	base := r.URL.Query().Get("base")
 	compare := r.URL.Query().Get("compare")

@@ -521,7 +521,19 @@ func parseDiff(raw string) []models.DiffFile {
 			cur.IsBinary = true
 			continue
 		}
-		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+		// --- and +++ lines tell us which side is /dev/null (pure add or pure delete)
+		if strings.HasPrefix(line, "--- ") {
+			if strings.TrimPrefix(line, "--- ") == "/dev/null" {
+				// File is newly created in compare — clear OldPath
+				cur.OldPath = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "+++ ") {
+			if strings.TrimPrefix(line, "+++ ") == "/dev/null" {
+				// File is deleted in compare — clear Path (only exists in base)
+				cur.Path = ""
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "@@") {

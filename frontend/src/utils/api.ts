@@ -82,6 +82,15 @@ export const bulkImportRepos = (repos: unknown[]) => api.post('/repos/bulk-impor
 export const getRefs = (repoId: string) => api.get(`/repos/${repoId}/refs`).then(d)
 // Returns FileEntry[] — { path } — all files in a ref
 export const getRefTree = (repoId: string, ref: string) => api.get(`/repos/${repoId}/ref-tree`, { params: { ref } }).then(d)
+export const getFilePairDiff = (
+  repoId: string,
+  baseRef: string, basePath: string, baseRepoId: string,
+  cmpRef: string, cmpPath: string, cmpRepoId: string,
+) => api.get(`/repos/${repoId}/file-pair-diff`, {
+  params: { base_ref: baseRef, base_path: basePath, base_repo_id: baseRepoId,
+            cmp_ref: cmpRef, cmp_path: cmpPath, cmp_repo_id: cmpRepoId }
+}).then(d)
+
 // Returns FileEntry[] — { path } — all files in a ref, from any repo
 export const getCrossRefTree = (repoId: string, ref: string, targetRepoId?: string) =>
   api.get(`/repos/${repoId}/cross-ref-tree`, { params: { ref, repo_id: targetRepoId } }).then(d)
