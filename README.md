@@ -1,6 +1,6 @@
 # 🌿 GitVisual — Git Without Command Lines
 
-> **Every git operation, visually guided. You will never need a terminal for git again.**
+> **This covers the most important Git operations for daily development workflows — including branching, merging, stashing, rebasing, cherry-picking, bisecting, and more git operation, visually guided. You will never need a terminal for git again.**
 
 ---
 
